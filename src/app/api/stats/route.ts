@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import { db, isDatabaseAvailable } from '@/lib/db';
 
-// In-memory stats (synced with jobs store)
+// Default stats for serverless environments
 let stats = {
   totalJobs: 0,
   completedJobs: 0,
@@ -11,26 +10,41 @@ let stats = {
 
 export async function GET() {
   try {
-    const dbAvailable = await isDatabaseAvailable();
+    // Dynamically import db only if needed
+    const { db } = await import('@/lib/db');
+    
+    // Check if Prisma is available
+    let dbAvailable = false;
+    try {
+      await db.$connect();
+      dbAvailable = true;
+    } catch {
+      dbAvailable = false;
+    }
     
     if (dbAvailable) {
-      const [totalJobs, completedJobs, runningJobs, totalScrapedItems] = await Promise.all([
-        db.scraperJob.count(),
-        db.scraperJob.count({ where: { status: 'completed' } }),
-        db.scraperJob.count({ where: { status: 'running' } }),
-        db.scrapedData.count()
-      ]);
-      
-      return NextResponse.json({
-        totalJobs,
-        completedJobs,
-        runningJobs,
-        totalScrapedItems
-      });
-    } else {
-      // Return in-memory stats
-      return NextResponse.json(stats);
+      try {
+        const [totalJobs, completedJobs, runningJobs, totalScrapedItems] = await Promise.all([
+          db.scraperJob.count(),
+          db.scraperJob.count({ where: { status: 'completed' } }),
+          db.scraperJob.count({ where: { status: 'running' } }),
+          db.scrapedData.count()
+        ]);
+        
+        return NextResponse.json({
+          totalJobs,
+          completedJobs,
+          runningJobs,
+          totalScrapedItems
+        });
+      } catch (dbError) {
+        console.error('Database query error:', dbError);
+      }
     }
+    
+    // Return default stats for serverless
+    return NextResponse.json(stats);
+    
   } catch (error) {
     console.error('Error fetching stats:', error);
     // Return default stats instead of error
@@ -41,9 +55,4 @@ export async function GET() {
       totalScrapedItems: 0
     });
   }
-}
-
-// Export function to update stats (used by other routes)
-export function updateStats(newStats: Partial<typeof stats>) {
-  stats = { ...stats, ...newStats };
 }

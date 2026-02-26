@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, isDatabaseAvailable } from '@/lib/db';
 
-// In-memory store reference (shared with scrape route)
-const scrapedDataStore = new Map<string, Array<{
+// In-memory store for scraped data
+const scrapedDataStore: Map<string, Array<{
   id: string;
   jobId: string;
   title: string | null;
@@ -13,7 +12,18 @@ const scrapedDataStore = new Map<string, Array<{
   rawData: string;
   createdAt: Date;
   job?: { name: string; url: string };
-}>>();
+}>> = new Map();
+
+// Helper to get database safely
+async function getDb() {
+  try {
+    const { db } = await import('@/lib/db');
+    await db.$connect();
+    return { db, available: true };
+  } catch {
+    return { db: null, available: false };
+  }
+}
 
 // GET - List scraped data
 export async function GET(request: NextRequest) {
@@ -22,9 +32,9 @@ export async function GET(request: NextRequest) {
     const jobId = searchParams.get('jobId');
     const limit = parseInt(searchParams.get('limit') || '20');
     
-    const dbAvailable = await isDatabaseAvailable();
+    const { db, available } = await getDb();
     
-    if (dbAvailable) {
+    if (available && db) {
       const where = jobId ? { jobId } : {};
       
       const data = await db.scrapedData.findMany({
@@ -39,33 +49,35 @@ export async function GET(request: NextRequest) {
       });
       
       return NextResponse.json(data);
-    } else {
-      // Return in-memory data
-      let allData: Array<{
-        id: string;
-        jobId: string;
-        title: string | null;
-        price: string | null;
-        address: string | null;
-        area: string | null;
-        rooms: string | null;
-        rawData: string;
-        createdAt: Date;
-        job?: { name: string; url: string };
-      }> = [];
-      
-      scrapedDataStore.forEach((items) => {
-        allData = allData.concat(items);
-      });
-      
-      if (jobId) {
-        allData = allData.filter(item => item.jobId === jobId);
-      }
-      
-      return NextResponse.json(allData.slice(0, limit));
     }
+    
+    // Return in-memory data
+    let allData: Array<{
+      id: string;
+      jobId: string;
+      title: string | null;
+      price: string | null;
+      address: string | null;
+      area: string | null;
+      rooms: string | null;
+      rawData: string;
+      createdAt: Date;
+      job?: { name: string; url: string };
+    }> = [];
+    
+    scrapedDataStore.forEach((items) => {
+      allData = allData.concat(items);
+    });
+    
+    if (jobId) {
+      allData = allData.filter(item => item.jobId === jobId);
+    }
+    
+    return NextResponse.json(allData.slice(0, limit));
+    
   } catch (error) {
     console.error('Error fetching scraped data:', error);
+    // Return empty array on error
     return NextResponse.json([]);
   }
 }

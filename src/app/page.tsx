@@ -490,11 +490,34 @@ export default function Home() {
       const jobsData = await jobsRes.json()
       const dataData = await dataRes.json()
       
-      setStats(statsData)
-      setJobs(jobsData)
-      setScrapedData(dataData)
+      // Validate and set stats
+      if (statsData && typeof statsData === 'object' && !statsData.error) {
+        setStats({
+          totalJobs: statsData.totalJobs || 0,
+          completedJobs: statsData.completedJobs || 0,
+          runningJobs: statsData.runningJobs || 0,
+          totalScrapedItems: statsData.totalScrapedItems || 0
+        })
+      }
+      
+      // Validate and set jobs (must be an array)
+      if (Array.isArray(jobsData)) {
+        setJobs(jobsData)
+      } else {
+        setJobs([])
+      }
+      
+      // Validate and set scraped data (must be an array)
+      if (Array.isArray(dataData)) {
+        setScrapedData(dataData)
+      } else {
+        setScrapedData([])
+      }
     } catch (error) {
       console.error('Error fetching data:', error)
+      // Set defaults on error
+      setJobs([])
+      setScrapedData([])
     } finally {
       setLoading(false)
     }

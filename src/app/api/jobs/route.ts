@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, isDatabaseAvailable } from '@/lib/db';
 
-// In-memory store for serverless environments without database
+// In-memory store for serverless environments
 const jobsStore: Map<string, {
   id: string;
   name: string;
@@ -15,12 +14,23 @@ const jobsStore: Map<string, {
 
 let jobIdCounter = 0;
 
+// Helper to get database safely
+async function getDb() {
+  try {
+    const { db } = await import('@/lib/db');
+    await db.$connect();
+    return { db, available: true };
+  } catch {
+    return { db: null, available: false };
+  }
+}
+
 // GET - List all jobs
 export async function GET() {
   try {
-    const dbAvailable = await isDatabaseAvailable();
+    const { db, available } = await getDb();
     
-    if (dbAvailable) {
+    if (available && db) {
       const jobs = await db.scraperJob.findMany({
         include: {
           _count: {
@@ -34,14 +44,14 @@ export async function GET() {
         ...job,
         itemCount: job._count.scrapedData
       })));
-    } else {
-      // Return in-memory jobs
-      const jobs = Array.from(jobsStore.values());
-      return NextResponse.json(jobs);
     }
+    
+    // Return in-memory jobs
+    return NextResponse.json(Array.from(jobsStore.values()));
+    
   } catch (error) {
     console.error('Error fetching jobs:', error);
-    // Return empty array instead of error for better UX
+    // Return empty array on error
     return NextResponse.json([]);
   }
 }
@@ -56,9 +66,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Name and URL are required' }, { status: 400 });
     }
     
-    const dbAvailable = await isDatabaseAvailable();
+    const { db, available } = await getDb();
     
-    if (dbAvailable) {
+    if (available && db) {
       const job = await db.scraperJob.create({
         data: {
           name,
@@ -70,22 +80,23 @@ export async function POST(request: NextRequest) {
       });
       
       return NextResponse.json(job);
-    } else {
-      // Create in-memory job
-      const id = `job_${++jobIdCounter}_${Date.now()}`;
-      const job = {
-        id,
-        name,
-        url,
-        scraperType,
-        status: 'pending',
-        itemCount: 0,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      };
-      jobsStore.set(id, job);
-      return NextResponse.json(job);
     }
+    
+    // Create in-memory job
+    const id = `job_${++jobIdCounter}_${Date.now()}`;
+    const job = {
+      id,
+      name,
+      url,
+      scraperType,
+      status: 'pending',
+      itemCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    jobsStore.set(id, job);
+    return NextResponse.json(job);
+    
   } catch (error) {
     console.error('Error creating job:', error);
     return NextResponse.json({ error: 'Failed to create job' }, { status: 500 });
@@ -102,9 +113,9 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Job ID is required' }, { status: 400 });
     }
     
-    const dbAvailable = await isDatabaseAvailable();
+    const { db, available } = await getDb();
     
-    if (dbAvailable) {
+    if (available && db) {
       const updateData: { status?: string; itemCount?: number } = {};
       if (status) updateData.status = status;
       if (itemCount !== undefined) updateData.itemCount = itemCount;
@@ -115,18 +126,19 @@ export async function PUT(request: NextRequest) {
       });
       
       return NextResponse.json(job);
-    } else {
-      // Update in-memory job
-      const job = jobsStore.get(id);
-      if (job) {
-        if (status) job.status = status;
-        if (itemCount !== undefined) job.itemCount = itemCount;
-        job.updatedAt = new Date();
-        jobsStore.set(id, job);
-        return NextResponse.json(job);
-      }
-      return NextResponse.json({ error: 'Job not found' }, { status: 404 });
     }
+    
+    // Update in-memory job
+    const job = jobsStore.get(id);
+    if (job) {
+      if (status) job.status = status;
+      if (itemCount !== undefined) job.itemCount = itemCount;
+      job.updatedAt = new Date();
+      jobsStore.set(id, job);
+      return NextResponse.json(job);
+    }
+    return NextResponse.json({ error: 'Job not found' }, { status: 404 });
+    
   } catch (error) {
     console.error('Error updating job:', error);
     return NextResponse.json({ error: 'Failed to update job' }, { status: 500 });
@@ -143,9 +155,9 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Job ID is required' }, { status: 400 });
     }
     
-    const dbAvailable = await isDatabaseAvailable();
+    const { db, available } = await getDb();
     
-    if (dbAvailable) {
+    if (available && db) {
       await db.scraperJob.delete({
         where: { id }
       });
@@ -154,6 +166,7 @@ export async function DELETE(request: NextRequest) {
     }
     
     return NextResponse.json({ success: true });
+    
   } catch (error) {
     console.error('Error deleting job:', error);
     return NextResponse.json({ error: 'Failed to delete job' }, { status: 500 });
