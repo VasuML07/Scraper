@@ -1,6 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { db, isDatabaseAvailable } from '@/lib/db';
 import ZAI from 'z-ai-web-dev-sdk';
+
+// In-memory store for scraped data
+const scrapedDataStore: Map<string, Array<{
+  id: string;
+  jobId: string;
+  title: string | null;
+  price: string | null;
+  address: string | null;
+  area: string | null;
+  rooms: string | null;
+  rawData: string;
+  createdAt: Date;
+}>> = new Map();
+
+let dataIdCounter = 0;
 
 // POST - Start scraping
 export async function POST(request: NextRequest) {
@@ -12,19 +27,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Job ID is required' }, { status: 400 });
     }
     
-    const job = await db.scraperJob.findUnique({
-      where: { id: jobId }
-    });
+    const dbAvailable = await isDatabaseAvailable();
+    let job: { id: string; name: string; url: string; status: string; scraperType: string } | null = null;
     
-    if (!job) {
-      return NextResponse.json({ error: 'Job not found' }, { status: 404 });
+    if (dbAvailable) {
+      job = await db.scraperJob.findUnique({
+        where: { id: jobId }
+      });
+    } else {
+      // For in-memory, we'll proceed even without job lookup
+      job = { id: jobId, name: 'Unknown', url: body.url || '', status: 'pending', scraperType: 'shallow' };
     }
     
     // Update job status to running
-    await db.scraperJob.update({
-      where: { id: jobId },
-      data: { status: 'running' }
-    });
+    if (dbAvailable) {
+      await db.scraperJob.update({
+        where: { id: jobId },
+        data: { status: 'running' }
+      });
+    }
     
     try {
       // Initialize ZAI for web scraping
@@ -32,21 +53,22 @@ export async function POST(request: NextRequest) {
       
       // Use page_reader function to scrape the URL
       const result = await zai.functions.invoke('page_reader', {
-        url: job.url
+        url: body.url || job?.url || ''
       });
       
-      const scrapedData: {
+      const scrapedData: Array<{
+        id: string;
+        jobId: string;
         title: string | null;
         price: string | null;
         address: string | null;
         area: string | null;
         rooms: string | null;
         rawData: string;
-      }[] = [];
+        createdAt: Date;
+      }> = [];
       
       if (result.data && result.data.html) {
-        // Extract data from the page
-        // For real estate, we try to extract property-like information
         const html = result.data.html;
         const title = result.data.title || null;
         
@@ -64,43 +86,54 @@ export async function POST(request: NextRequest) {
         
         for (let i = 0; i < Math.min(maxItems, 20); i++) {
           scrapedData.push({
+            id: `data_${++dataIdCounter}_${Date.now()}`,
+            jobId,
             title: i === 0 ? title : null,
             price: priceMatches[i] || null,
             address: null,
             area: areaMatches[i] || null,
             rooms: roomMatches[i] || null,
             rawData: JSON.stringify({
-              source: job.url,
+              source: body.url || job?.url,
               scrapedAt: new Date().toISOString(),
               pageTitle: title,
               excerpt: html.substring(0, 500)
-            })
+            }),
+            createdAt: new Date()
           });
         }
       }
       
-      // Save scraped data to database
-      if (scrapedData.length > 0) {
+      // Save scraped data
+      if (dbAvailable && scrapedData.length > 0) {
         await db.scrapedData.createMany({
           data: scrapedData.map(item => ({
-            jobId,
-            ...item
+            jobId: item.jobId,
+            title: item.title,
+            price: item.price,
+            address: item.address,
+            area: item.area,
+            rooms: item.rooms,
+            rawData: item.rawData
           }))
         });
+        
+        // Update job status to completed
+        await db.scraperJob.update({
+          where: { id: jobId },
+          data: {
+            status: 'completed',
+            itemCount: scrapedData.length
+          }
+        });
+      } else {
+        // Store in memory
+        scrapedDataStore.set(jobId, scrapedData);
       }
-      
-      // Update job status to completed
-      const updatedJob = await db.scraperJob.update({
-        where: { id: jobId },
-        data: {
-          status: 'completed',
-          itemCount: scrapedData.length
-        }
-      });
       
       return NextResponse.json({
         success: true,
-        job: updatedJob,
+        job: { id: jobId, status: 'completed', itemCount: scrapedData.length },
         itemsScraped: scrapedData.length
       });
       
@@ -108,10 +141,12 @@ export async function POST(request: NextRequest) {
       console.error('Scraping error:', scrapeError);
       
       // Update job status to failed
-      await db.scraperJob.update({
-        where: { id: jobId },
-        data: { status: 'failed' }
-      });
+      if (dbAvailable) {
+        await db.scraperJob.update({
+          where: { id: jobId },
+          data: { status: 'failed' }
+        });
+      }
       
       return NextResponse.json({
         error: 'Scraping failed',
