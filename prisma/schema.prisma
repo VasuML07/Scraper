@@ -21,12 +21,27 @@ model User {
   updatedAt DateTime @updatedAt
 }
 
-model Post {
-  id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model ScraperJob {
+  id          String       @id @default(cuid())
+  name        String
+  url         String
+  status      String       @default("pending") // pending, running, completed, failed
+  itemCount   Int          @default(0)
+  scraperType String       @default("shallow") // shallow, deep
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  scrapedData ScrapedData[]
+}
+
+model ScrapedData {
+  id        String     @id @default(cuid())
+  jobId     String
+  job       ScraperJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  title     String?
+  price     String?
+  address   String?
+  area      String?
+  rooms     String?
+  rawData   String?    // JSON string for additional data
+  createdAt DateTime   @default(now())
 }

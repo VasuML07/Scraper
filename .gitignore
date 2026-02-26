@@ -49,3 +49,13 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# Analysis files
+*.json
+!package.json
+!package-lock.json
+!bun.lock
+!tsconfig.json
+
+# Database
+db/
